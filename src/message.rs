@@ -309,7 +309,7 @@ impl Message {
     /// newline stripped, as well as its optional carriage return. The caller
     /// must detect and skip an empty message.
     pub fn parse(line: &[u8]) -> Option<Message> {
-        let (_, line) = parse_tags(line)?; // TODO: tags? D:
+        let (_tags, line) = parse_tags(line)?;
         let (source, line) = Source::parse(line)?;
         let (command, mut line) = Command::parse(line)?;
         let mut params = Vec::new();

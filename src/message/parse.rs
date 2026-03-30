@@ -73,7 +73,7 @@ pub fn parse_tags(line: &[u8]) -> Option<(Option<&[u8]>, &[u8])> {
     if line.is_empty() || line[0] != b'@' { Some((None, line)) }
     else {
         let split = find_idx_of_space_or_end(line)?;
-        Some((Some(&line[1..split]), skip_leading_space(line)?))
+        Some((Some(&line[1..split]), skip_leading_space(&line[split..])?))
     }
 }
 

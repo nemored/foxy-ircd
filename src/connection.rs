@@ -8,7 +8,7 @@ use tokio::{
     net::TcpStream,
 };
 
-pub trait FoxyStream : AsyncRead + AsyncWrite {
+pub trait FoxyStream : AsyncRead + AsyncWrite + Send + Unpin {
     fn peer_addr(&self) -> io::Result<SocketAddr>;
 }
 

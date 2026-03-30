@@ -18,6 +18,7 @@
 use std::{
     collections::hash_map::HashMap,
     io::ErrorKind,
+    path::Component,
     path::PathBuf,
     sync::Arc,
 };
@@ -33,6 +34,8 @@ pub struct Db {
     cache: RwLock<HashMap<String, Option<Arc<Value>>>>,
     verbose: bool,
 }
+
+const NONE_PURGE_THRESHOLD: usize = 1024;
 
 impl Db {
     pub fn new(backing_paths: Vec<PathBuf>, verbose: bool) -> Db {
@@ -129,10 +132,44 @@ impl Db {
             cur_value.and_then(|x| x.clone())
         }
     }
+    fn validate_path(path: &str) -> Result<(), &'static str> {
+        if path.is_empty() {
+            return Err("invalid empty path");
+        }
+        if path.ends_with('~') {
+            return Err("invalid backup path");
+        }
+        if !path.ends_with(".cj") {
+            return Err("path must end in .cj");
+        }
+        let as_path = std::path::Path::new(path);
+        for component in as_path.components() {
+            match component {
+                Component::Normal(seg) => {
+                    let seg = seg.to_str().ok_or("path contains non-UTF8 data")?;
+                    if seg.starts_with('.') {
+                        return Err("path segment must not start with dot");
+                    }
+                },
+                _ => return Err("path must be relative and must not contain . or .."),
+            }
+        }
+        Ok(())
+    }
+    async fn purge_cached_nones_if_needed(&self) {
+        let mut cache = self.cache.write().await;
+        if cache.len() < NONE_PURGE_THRESHOLD {
+            return;
+        }
+        cache.retain(|_, v| v.is_some());
+    }
     /// Get a datum from the database. May hit the filesystem if the datum
     /// isn't yet cached.
     pub async fn get(&self, path: &str) -> Option<Arc<Value>> {
-        // TODO: validate path sanity
+        if let Err(reason) = Self::validate_path(path) {
+            eprintln!("Warning: refusing invalid DB path {:?}: {}", path, reason);
+            return None;
+        }
         // Try to get it from the cache (reader lock involved)
         if let Some(value) = self.get_from_cache(path).await {
             return value
@@ -142,7 +179,11 @@ impl Db {
         let result = self.get_from_fs(path).await.map(|x| Arc::new(x));
         // and then try to put the result, positive or negative, into the cache
         // (writer lock involved)
-        self.put_into_cache(path.to_owned(), None, result.clone()).await
+        let out = self.put_into_cache(path.to_owned(), None, result.clone()).await;
+        if out.is_none() {
+            self.purge_cached_nones_if_needed().await;
+        }
+        out
         // return whatever's in the cache now, even if it's not what we tried
         // to put in
     }
@@ -155,13 +196,17 @@ impl Db {
         // and someone else is populating the cache from the backing value at
         // the same time. We have sufficient ABA protection logic in place on
         // the inside to handle that.
-        // TODO: avoid to_owned() if entry already exists?
         let mut cache = self.cache.write().await;
-        cache.insert(path.to_owned(), Some(Arc::new(datum)));
+        if let Err(reason) = Self::validate_path(path) {
+            eprintln!("Warning: refusing invalid DB path {:?}: {}", path, reason);
+            return;
+        }
+        let datum = Arc::new(datum);
+        match cache.get_mut(path) {
+            Some(entry) => *entry = Some(datum),
+            None => {
+                cache.insert(path.to_owned(), Some(datum));
+            },
+        }
     }
 }
-
-// PATH SANITIZATION: must not end in ~, must end in .cj, %XX? must not contain
-// . leading or after slash?
-// TODO: purge feature, and automatically use it if we have hundreds of
-// thousands of cached Nones
