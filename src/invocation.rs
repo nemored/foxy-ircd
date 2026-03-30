@@ -16,21 +16,24 @@ If NO -l options are given, the default is:
 
   -l [::]:6667
 "#, opts.usage(&brief));
-    // TODO: add to default, -s 0.0.0.0:6697, if there's a key and cert
+    print!(r#"
+TLS listeners can be requested with -s/--listen-tls but require a future TLS
+backend integration.
+"#);
 }
 
 pub fn get_invocation<I>(incoming_connection_handler: I)
                          -> Option<Invocation>
-where I: FnMut(Box<dyn FoxyStream>) + Clone + Send + 'static {
+where I: FnMut(Box<dyn FoxyStream + Send>) + Clone + Send + 'static {
     let mut opts = getopts::Options::new();
     opts.optflag("h", "help", ""); // heh
     opts.optflag("?", "usage", "Print what you're reading now.");
     opts.optmulti("l", "listen", "Listen for non-TLS connections on a given \
                                   address and port. May be given more than \
                                   once.", "ADDR:PORT");
-    //opts.optmulti("s", "listen-tls", "Listen for TLS connections on a given \
-    //                                  address and port. May be given more \
-    //                                  than once.", "ADDR:PORT");
+    opts.optmulti("s", "listen-tls", "Listen for TLS connections on a given \
+                                      address and port. May be given more \
+                                      than once.", "ADDR:PORT");
     opts.optmulti("d", "db-dir", "Specify a directory to use as a database. \
                                   If given more than once, they are in \
                                   descending order of priority, and only the \
@@ -80,7 +83,7 @@ where I: FnMut(Box<dyn FoxyStream>) + Clone + Send + 'static {
             .core_threads(wanted_threads),
     }.enable_io().build().unwrap();
     let mut listeners = Vec::new();
-    if !matches.opt_present("l") /*&& !matches.opt_present("s")*/ {
+    if !matches.opt_present("l") && !matches.opt_present("s") {
         listeners.push((("[::]:6667").parse().unwrap(), false));
     }
     for el in matches.opt_strs("l") {
@@ -93,6 +96,18 @@ where I: FnMut(Box<dyn FoxyStream>) + Clone + Send + 'static {
             },
         };
         listeners.push((addr, false))
+    }
+    for el in matches.opt_strs("s") {
+        let _addr: SocketAddr = match el.parse() {
+            Ok(x) => x,
+            Err(_) => {
+                println!("Invalid IP address+host: {}", el);
+                print_usage(program_name, opts);
+                return None
+            },
+        };
+        eprintln!("TLS listener {} requested, but TLS support is not yet enabled.", el);
+        return None
     }
     if !runtime.enter(|| {
         for (addr, _tls) in listeners.into_iter() {
